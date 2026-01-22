@@ -6,7 +6,6 @@ import numpy as np
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Grade Moderator Pro", layout="wide")
 
-# Standard Grade Boundaries (Percentages)
 BOUNDARIES = {
     'HD': 80,
     'DI': 70,
@@ -25,7 +24,6 @@ def categorize_percentage(pct):
     else: return 'NN'
 
 def is_cusp(pct):
-    # Checks if a percentage is on a boundary cusp (49, 59, 69, 79)
     if pd.isna(pct): return False
     rounded = round(pct)
     for grade, boundary in BOUNDARIES.items():
@@ -50,110 +48,119 @@ with st.sidebar:
 # --- MAIN APP ---
 if uploaded_file is not None:
     try:
-        # 1. PRE-PROCESS TO FIND MAX POINTS
-        # Read first few rows to find "Points Possible"
-        raw_head = pd.read_csv(uploaded_file, header=None, nrows=5)
+        # 1. ROBUST LOAD (Fixing the "No columns" error)
+        # We assume the file *might* have garbage rows. 
+        # We read the first few lines to check structure without consuming the whole file if possible,
+        # but the safest way in Streamlit is to read, check, and handle.
         
-        # Locate the "Points Possible" row
-        points_row_idx = None
-        for idx, row in raw_head.iterrows():
-            if "Points Possible" in str(row.values):
-                points_row_idx = idx
-                break
-        
-        # Extract Max Points if found
-        max_points_map = {}
-        if points_row_idx is not None:
-            # Reload with header at row 0 to get column names correct, but keep access to the data
-            df_temp = pd.read_csv(uploaded_file)
-            # The values in points_row_idx correspond to the columns in df_temp
-            # We need to map Column Name -> Max Points value
-            # Note: The index in raw_head might differ from df_temp if header=0. 
-            # Usually "Points Possible" is row index 1 in the dataframe (3rd line in CSV)
-            # Let's trust the logic: Read full csv, check row 0 or 1.
-            pass
-
-        # Robust Load
+        # Step A: Load the dataframe normally first
+        uploaded_file.seek(0) # Ensure we are at the start
         df = pd.read_csv(uploaded_file)
         
-        # Check for Canvas Metadata Rows
+        # Step B: Check for Canvas "Points Possible" row
+        # Canvas typically has:
+        # Row 0: Headers
+        # Row 1: "Manual Posting" (sometimes)
+        # Row 2: "Points Possible"
+        
+        max_points_map = {}
         data_start_idx = 0
-        if len(df) > 1 and str(df.iloc[1, 0]) == "Points Possible":
-            # Map column names to their max points
+        
+        # Check if the 2nd or 3rd row contains "Points Possible" in the first column
+        # We use .astype(str) to avoid errors if the cell is NaN
+        found_points_row = False
+        points_row_index = -1
+        
+        # Look at the first 5 rows to find "Points Possible"
+        for i in range(min(5, len(df))):
+            first_cell = str(df.iloc[i, 0]).strip()
+            if "Points Possible" in first_cell:
+                points_row_index = i
+                found_points_row = True
+                break
+        
+        if found_points_row:
+            st.toast("Canvas format detected: Found 'Points Possible' row.", icon="🧹")
+            
+            # Extract max points from that row
             for col in df.columns:
-                val = df.iloc[1][col]
+                val = df.iloc[points_row_index][col]
                 try:
                     max_points_map[col] = float(val)
                 except:
-                    max_points_map[col] = None # Not a scored column
+                    max_points_map[col] = None
             
-            # Remove metadata rows
-            st.toast("Canvas format detected: Extracted 'Points Possible'.", icon="🧹")
-            df_clean = df.iloc[2:].reset_index(drop=True)
+            # The actual student data starts AFTER the Points Possible row
+            df_clean = df.iloc[points_row_index + 1:].reset_index(drop=True)
         else:
+            # Assume standard CSV
             df_clean = df.copy()
 
-        # Convert numeric columns
+        # Step C: Convert columns to numeric
         numeric_cols = []
         for col in df_clean.columns:
+            # Skip ID/Name columns
             if col not in ['Student', 'ID', 'SIS User ID', 'SIS Login ID', 'Section']:
-                # Attempt convert
+                # Force conversion to numeric, turning text into NaN
                 s_numeric = pd.to_numeric(df_clean[col], errors='coerce')
                 df_clean[col] = s_numeric
-                # If column has valid numbers, add to list
+                
+                # Only keep columns that have at least one valid number
                 if s_numeric.notna().sum() > 0:
                     numeric_cols.append(col)
 
         # 2. SELECT ASSIGNMENT
+        if not numeric_cols:
+            st.error("No numeric grade columns found. Please check your CSV.")
+            st.stop()
+
         st.divider()
         col_sel, mode_sel = st.columns([2, 1])
         
         with col_sel:
-            # Default to a "Final Score" if available
+            # Smart default: Try to find 'Final Score' or 'Total'
             def_idx = 0
             for i, c in enumerate(numeric_cols):
-                if "Final Score" in c or "Total" in c:
+                if "Final Score" in c or "Total" in c or "Current Score" in c:
                     def_idx = i
                     break
             score_col = st.selectbox("Select Assignment / Column to Moderate:", numeric_cols, index=def_idx)
 
-        # Determine Max Points for this column
-        # Priority 1: From the "Points Possible" row we parsed
-        # Priority 2: 100 if it looks like a percentage (contains "Score")
-        # Priority 3: Max value found in data (fallback)
+        # Determine Max Points
+        # Priority: 1. Map, 2. Name check, 3. Max value
         max_score = 100.0
-        is_percentage_col = False
         
         if score_col in max_points_map and max_points_map[score_col] is not None and max_points_map[score_col] > 0:
             max_score = max_points_map[score_col]
-        elif "Score" in score_col or "Percentage" in score_col:
+        elif "Score" in score_col or "Percentage" in score_col or df_clean[score_col].max() > 50:
+             # Assume 100 if it looks like a percentage or values are high
             max_score = 100.0
-            is_percentage_col = True
         else:
-            # Fallback guessing
-            if df_clean[score_col].max() <= 100:
-                # Ambiguous. Let's ask user or assume 100? 
-                # Safer to assume it's raw marks if not explicit.
-                # Let's default to max found if it's small (like 10 or 20)
-                pass 
+            # If max value is small (e.g. 18), assume it's raw marks out of 20? 
+            # Or just default to 100 to be safe? 
+            # Let's trust the user to toggle if needed, but default to 100 is safest for "Final Score".
+            # If it's an assignment (e.g. "A1"), max_points_map should have caught it.
+            pass
         
-        # Allow user to override Max Points
         with mode_sel:
-            st.write(f"**Max Points Detected:** {max_score}")
+            # Allow manual override of max points if needed
+            manual_max = st.number_input("Max Points Possible", value=float(max_score))
+            max_score = manual_max
             view_mode = st.radio("View Graphs As:", ["Percentage (%)", "Raw Marks"], horizontal=True)
 
         # 3. CALCULATIONS
-        # We perform all bell curve logic on PERCENTAGES, then convert back if needed.
+        # Logic: Convert everything to Percentage -> Apply Curve -> Convert back
         
-        # Create Analysis DataFrame
-        # A. Get Raw Score
+        # A. Filter Data
         analysis_df = df_clean[['Student', 'ID', score_col]].copy().dropna()
         analysis_df.rename(columns={score_col: 'Raw_Original'}, inplace=True)
         
         # B. Convert to Percentage
+        # Protection against divide by zero
+        if max_score == 0: max_score = 100 
         analysis_df['Pct_Original'] = (analysis_df['Raw_Original'] / max_score) * 100
         
-        # C. Apply Bell Curve (on Percentage)
+        # C. Apply Bell Curve
         cur_mean = analysis_df['Pct_Original'].mean()
         cur_std = analysis_df['Pct_Original'].std()
         
@@ -162,114 +169,78 @@ if uploaded_file is not None:
         else:
             analysis_df['Pct_Adjusted'] = target_mean + (analysis_df['Pct_Original'] - cur_mean) * (target_std / cur_std)
             
-        # Clip and Round
+        # Clip (0-100%)
         analysis_df['Pct_Adjusted'] = analysis_df['Pct_Adjusted'].clip(0, 100)
         
         # D. Convert back to Raw
         analysis_df['Raw_Adjusted'] = (analysis_df['Pct_Adjusted'] / 100) * max_score
         
-        # E. Categories (Always based on Percentage)
+        # E. Categories
         analysis_df['Cat_Original'] = analysis_df['Pct_Original'].apply(categorize_percentage)
         analysis_df['Cat_Adjusted'] = analysis_df['Pct_Adjusted'].apply(categorize_percentage)
-        analysis_df['Is_Cusp'] = analysis_df['Pct_Adjusted'].apply(is_cusp) # Check cusp on NEW grades? Or Old? Usually Old.
         analysis_df['Is_Cusp_Original'] = analysis_df['Pct_Original'].apply(is_cusp)
 
         # 4. VISUALIZATION
-        
-        # Determine what to plot based on View Mode
         if view_mode == "Percentage (%)":
             val_col_old = 'Pct_Original'
             val_col_new = 'Pct_Adjusted'
             axis_title = "Percentage Score (%)"
-            hover_template = "%{x:.1f}%"
-            # Round for display
-            analysis_df['Display_Old'] = analysis_df['Pct_Original'].round(1)
-            analysis_df['Display_New'] = analysis_df['Pct_Adjusted'].round(1)
+            plot_max = 100
         else:
             val_col_old = 'Raw_Original'
             val_col_new = 'Raw_Adjusted'
             axis_title = f"Raw Marks (out of {max_score})"
-            hover_template = "%{x:.2f}"
-            analysis_df['Display_Old'] = analysis_df['Raw_Original'].round(2)
-            analysis_df['Display_New'] = analysis_df['Raw_Adjusted'].round(2)
+            plot_max = max_score
 
-        # Stats Row
-        st.subheader(f"Analysis for: {score_col}")
+        st.subheader(f"Analysis: {score_col}")
+        
+        # Summary Metrics
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Original Average", f"{analysis_df[val_col_old].mean():.2f}")
         m2.metric("Original Std Dev", f"{analysis_df[val_col_old].std():.2f}")
         m3.metric("Projected Average", f"{analysis_df[val_col_new].mean():.2f}")
         m4.metric("Projected Std Dev", f"{analysis_df[val_col_new].std():.2f}")
 
-        # Graphs
-        c1, c2 = st.columns([2, 1])
+        col1, col2 = st.columns([2, 1])
         
-        with c1:
+        with col1:
             fig = go.Figure()
+            # Original Histogram
             fig.add_trace(go.Histogram(
                 x=analysis_df[val_col_old], 
-                name='Original', 
-                opacity=0.6, 
-                marker_color='gray',
-                xbins=dict(start=0, end=max_score if view_mode=="Raw Marks" else 100, size=max_score/20 if view_mode=="Raw Marks" else 5)
+                name='Original', opacity=0.6, marker_color='gray',
+                xbins=dict(start=0, end=plot_max, size=plot_max/20)
             ))
+            # New Histogram
             fig.add_trace(go.Histogram(
                 x=analysis_df[val_col_new], 
-                name='Bell Curved', 
-                opacity=0.6, 
-                marker_color='#0068C9',
-                xbins=dict(start=0, end=max_score if view_mode=="Raw Marks" else 100, size=max_score/20 if view_mode=="Raw Marks" else 5)
+                name='Bell Curved', opacity=0.6, marker_color='#0068C9',
+                xbins=dict(start=0, end=plot_max, size=plot_max/20)
             ))
-            fig.update_layout(barmode='overlay', xaxis_title=axis_title, yaxis_title="Count", margin=dict(t=20))
+            fig.update_layout(barmode='overlay', xaxis_title=axis_title, yaxis_title="Student Count")
             st.plotly_chart(fig, use_container_width=True)
-            
-        with c2:
-            st.write("#### Grade Migration")
+
+        with col2:
+            st.write("#### Category Changes")
             cats = ['HD','DI','CR','PA','NN']
             orig_counts = analysis_df['Cat_Original'].value_counts().reindex(cats, fill_value=0)
             adj_counts = analysis_df['Cat_Adjusted'].value_counts().reindex(cats, fill_value=0)
             
-            mig_df = pd.DataFrame({'Original': orig_counts, 'New': adj_counts, 'Diff': adj_counts - orig_counts})
+            diff_df = pd.DataFrame({
+                'Original': orig_counts,
+                'New': adj_counts,
+                'Diff': adj_counts - orig_counts
+            })
             
             def color_diff(val):
-                color = 'green' if val > 0 else 'red' if val < 0 else 'grey'
-                return f'color: {color}'
-            
-            st.dataframe(mig_df.style.applymap(color_diff, subset=['Diff']))
-            
-            st.write(f"**Cusp Students (Original):** {analysis_df['Is_Cusp_Original'].sum()}")
+                if val > 0: return 'color: green'
+                elif val < 0: return 'color: red'
+                return 'color: gray'
 
-        # 5. DETAILED DATA & EXPORT
+            st.dataframe(diff_df.style.applymap(color_diff, subset=['Diff']))
+            st.caption(f"Original Cusp Students: {analysis_df['Is_Cusp_Original'].sum()}")
+
+        # 5. DETAILED VIEW & EXPORT
         st.divider()
         with st.expander("🔎 View Cusp Students (Original Grades)", expanded=True):
-            st.markdown("Students sitting on **49%, 59%, 69%, 79%** boundaries.")
-            cusp_df = analysis_df[analysis_df['Is_Cusp_Original'] == True].sort_values(by='Pct_Original', ascending=False)
-            st.dataframe(cusp_df[['Student', 'ID', 'Raw_Original', 'Pct_Original', 'Cat_Original']])
-
-        # Prepare Export
-        # We need to integrate the new columns back into the main DF for download
-        # Logic: Add " [Curved]" column next to the selected column
-        df_export = df.copy() # Use original raw DF including metadata if possible? 
-        # Actually, standard practice is to export the clean data + adjustments.
-        
-        # Let's create a clean export
-        export_df = df_clean.copy()
-        
-        # Add the calculated columns
-        # Map using index
-        export_df.loc[analysis_df.index, f'{score_col} (Curved Raw)'] = analysis_df['Raw_Adjusted'].round(2)
-        export_df.loc[analysis_df.index, f'{score_col} (Curved %)'] = analysis_df['Pct_Adjusted'].round(1)
-        export_df.loc[analysis_df.index, f'{score_col} (Grade)'] = analysis_df['Cat_Adjusted']
-        
-        # Move these new columns next to the original
-        cols = list(export_df.columns)
-        # Reordering is complex, let's just append for safety
-        
-        csv = export_df.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Result CSV", csv, "moderated_grades.csv", "text/csv", type="primary")
-
-    except Exception as e:
-        st.error(f"Error: {e}")
-        st.caption("Tip: Ensure your CSV has a header row and numeric data.")
-else:
-    st.info("Upload a Canvas CSV to begin.")
+            st.markdown("Students sitting on **4
