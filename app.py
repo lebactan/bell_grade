@@ -19,6 +19,7 @@ ORDERED_CATS = ['NN', 'PA', 'CR', 'DI', 'HD']
 
 def categorize_percentage(pct):
     if pd.isna(pct): return 'NN'
+    # Standard rounding for categorization
     pct = round(pct)
     if pct >= BOUNDARIES['HD']: return 'HD'
     elif pct >= BOUNDARIES['DI']: return 'DI'
@@ -28,9 +29,11 @@ def categorize_percentage(pct):
 
 def is_cusp(pct):
     if pd.isna(pct): return False
-    rounded = round(pct)
+    # Check decimals precisely without rounding first.
+    # Cusp = Score is strictly less than boundary, but within 2 marks (e.g., 78.0 <= x < 80.0)
+    # This captures 79.8, 79.99, 78.1, etc.
     for grade, boundary in BOUNDARIES.items():
-        if boundary > 0 and rounded == (boundary - 1):
+        if boundary > 0 and (boundary - 2) <= pct < boundary:
             return True
     return False
 
@@ -49,7 +52,7 @@ with st.sidebar:
     st.divider()
     st.header("3. Advanced Logic")
     
-    # --- NEW CHECKBOX FOR CUSP AVOIDANCE ---
+    # --- CHECKBOX FOR CUSP AVOIDANCE ---
     avoid_cusps = st.checkbox(
         "Avoid Cusp Grades (Auto-Bump)", 
         value=False,
@@ -178,17 +181,13 @@ if uploaded_file is not None:
         if avoid_cusps:
             def clean_cusps(pct):
                 rounded = round(pct)
-                
                 # FAIL/PASS
                 if 45 <= rounded <= 47: return 44.0
                 if 48 <= rounded <= 49: return 50.0
-                
                 # CREDIT
                 if 58 <= rounded <= 59: return 60.0
-                
                 # DISTINCTION
                 if 68 <= rounded <= 69: return 70.0
-                
                 # HIGH DISTINCTION
                 if 78 <= rounded <= 79: return 80.0
                 
@@ -203,7 +202,7 @@ if uploaded_file is not None:
         analysis_df['Cat_Original'] = analysis_df['Pct_Original'].apply(categorize_percentage)
         analysis_df['Cat_Adjusted'] = analysis_df['Pct_Adjusted'].apply(categorize_percentage)
         
-        # Cusp Calculations
+        # Cusp Calculations (Using new decimal logic)
         analysis_df['Is_Cusp_Original'] = analysis_df['Pct_Original'].apply(is_cusp)
         analysis_df['Is_Cusp_Adjusted'] = analysis_df['Pct_Adjusted'].apply(is_cusp)
 
@@ -232,11 +231,10 @@ if uploaded_file is not None:
                 fig.add_trace(go.Histogram(x=analysis_df['Pct_Original'], name='Original', opacity=0.6, marker_color='gray'))
                 fig.add_trace(go.Histogram(x=analysis_df['Pct_Adjusted'], name='Bell Curved', opacity=0.6, marker_color='#0068C9'))
                 
-                # Visualize Forbidden Zones if enabled
                 if avoid_cusps:
                     zones = [(45, 49), (58, 59), (68, 69), (78, 79)]
                     for z in zones:
-                         fig.add_vrect(x0=z[0], x1=z[1], fillcolor="red", opacity=0.1, annotation_text="Gap", annotation_position="top left")
+                         fig.add_vrect(x0=z[0], x1=z[1], fillcolor="red", opacity=0.1, annotation_text="Avoid", annotation_position="top left")
 
                 fig.update_layout(barmode='overlay')
             st.plotly_chart(fig, use_container_width=True)
@@ -319,7 +317,7 @@ if uploaded_file is not None:
                 cusp_df = analysis_df[analysis_df['Is_Cusp_Original'] == True].sort_values(by='Pct_Original', ascending=False)
                 lbl = "Original Cusp (Pre-Curve)"
             
-            st.caption(f"Showing: **{lbl}** (49, 59, 69, 79)")
+            st.caption(f"Showing: **{lbl}** (Includes decimals like 79.8)")
             
             if not cusp_df.empty:
                 render_dynamic_table(cusp_df)
