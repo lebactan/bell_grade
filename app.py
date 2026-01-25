@@ -48,11 +48,10 @@ with st.sidebar:
     
     st.divider()
     st.header("3. View Options")
-    # UPDATED CHECKBOX LOGIC
     show_new_marks = st.checkbox(
         "Show Projected (New) Marks", 
         value=True, 
-        help="Check to switch tables to 'Projected' view (New Marks, New Categories, Red Highlights). Uncheck to see 'Original' view."
+        help="Check to switch tables to 'Projected' view. Uncheck to see 'Original' view."
     )
 
 # --- MAIN APP ---
@@ -190,10 +189,23 @@ if uploaded_file is not None:
             st.write("#### Migration Table")
             orig_counts = analysis_df['Cat_Original'].value_counts().reindex(ORDERED_CATS, fill_value=0)
             adj_counts = analysis_df['Cat_Adjusted'].value_counts().reindex(ORDERED_CATS, fill_value=0)
-            diff_df = pd.DataFrame({'Original': orig_counts, 'New': adj_counts, 'Change': adj_counts - orig_counts})
+            
+            # Calculate Percentages
+            orig_pct = (orig_counts / total_students * 100).round(1).astype(str) + '%'
+            adj_pct = (adj_counts / total_students * 100).round(1).astype(str) + '%'
+            
+            diff_df = pd.DataFrame({
+                'Original': orig_counts,
+                'Original %': orig_pct,
+                'New': adj_counts,
+                'New %': adj_pct,
+                'Change': adj_counts - orig_counts
+            })
             
             def color_diff(val):
                 return 'color: green' if val > 0 else 'color: red' if val < 0 else 'color: gray'
+            
+            # Only color the numerical change column
             st.dataframe(diff_df.style.map(color_diff, subset=['Change']))
 
         # 5. DETAILED TABLES WITH STYLING
@@ -201,8 +213,6 @@ if uploaded_file is not None:
         
         # --- Helper Function to Render Styled Tables ---
         def render_dynamic_table(data_full):
-            # 1. Decide columns based on Checkbox
-            # Always have identifiers and Old Data
             cols = [s_num_col, 'Student', 'Raw_Original', 'Cat_Original']
             headers = ['S-Number', 'Name', 'Old Mark', 'Original Category']
             
@@ -210,20 +220,16 @@ if uploaded_file is not None:
                 cols.extend(['Raw_Adjusted', 'Cat_Adjusted'])
                 headers.extend(['New Mark', 'New Category'])
 
-            # 2. Create Display DataFrame
             display_df = data_full[cols].copy()
             display_df.columns = headers
             
-            # 3. Styling Logic
             def highlight_row(row):
-                # Only highlight if showing new marks AND categories changed
                 if show_new_marks and (row['Original Category'] != row['New Category']):
                     return ['background-color: #ffcccc; color: black'] * len(row)
                 return [''] * len(row)
             
             styler = display_df.style.apply(highlight_row, axis=1)
             
-            # Format numbers safely (check if columns exist)
             format_dict = {'Old Mark': '{:.2f}'}
             if 'New Mark' in display_df.columns:
                 format_dict['New Mark'] = '{:.2f}'
@@ -231,45 +237,65 @@ if uploaded_file is not None:
             
             st.write("Tip: Drag mouse to select rows and copy.")
             st.table(styler)
+            
+        # --- Helper to manage table visibility logic ---
+        def get_category_data(cat_name):
+            if show_new_marks:
+                df_sub = analysis_df[analysis_df['Cat_Adjusted'] == cat_name].sort_values(by='Pct_Adjusted', ascending=True)
+                lbl = f"Projected {cat_name} (Post-Curve)"
+            else:
+                df_sub = analysis_df[analysis_df['Cat_Original'] == cat_name].sort_values(by='Pct_Original', ascending=True)
+                lbl = f"Original {cat_name} (Pre-Curve)"
+            return df_sub, lbl
 
         # --- NN TABLE ---
         with st.expander("🚨 View NN (Fail) Students", expanded=True):
-            if show_new_marks:
-                # Show students who are NOW Failing
-                nn_df = analysis_df[analysis_df['Cat_Adjusted'] == 'NN'].sort_values(by='Pct_Adjusted', ascending=True)
-                lbl = "Projected Failures (Post-Curve)"
+            data, label = get_category_data('NN')
+            st.caption(f"Showing: **{label}**")
+            if not data.empty:
+                render_dynamic_table(data)
             else:
-                # Show students who ORIGINALLY Failed
-                nn_df = analysis_df[analysis_df['Cat_Original'] == 'NN'].sort_values(by='Pct_Original', ascending=True)
-                lbl = "Original Failures (Pre-Curve)"
-
-            st.caption(f"Showing: **{lbl}**")
-            
-            if not nn_df.empty:
-                render_dynamic_table(nn_df)
-            else:
-                st.success(f"No students found in {lbl}.")
+                st.success("No students in this category.")
 
         # --- PA TABLE ---
-        with st.expander("⚠️ View PA (Pass) Students", expanded=True):
-            if show_new_marks:
-                pa_df = analysis_df[analysis_df['Cat_Adjusted'] == 'PA'].sort_values(by='Pct_Adjusted', ascending=True)
-                lbl = "Projected Passes (Post-Curve)"
+        with st.expander("⚠️ View PA (Pass) Students", expanded=False):
+            data, label = get_category_data('PA')
+            st.caption(f"Showing: **{label}**")
+            if not data.empty:
+                render_dynamic_table(data)
             else:
-                pa_df = analysis_df[analysis_df['Cat_Original'] == 'PA'].sort_values(by='Pct_Original', ascending=True)
-                lbl = "Original Passes (Pre-Curve)"
-            
-            st.caption(f"Showing: **{lbl}**")
-
-            if not pa_df.empty:
-                render_dynamic_table(pa_df)
+                st.success("No students in this category.")
+                
+        # --- CR TABLE ---
+        with st.expander("📘 View CR (Credit) Students", expanded=False):
+            data, label = get_category_data('CR')
+            st.caption(f"Showing: **{label}**")
+            if not data.empty:
+                render_dynamic_table(data)
             else:
-                st.success(f"No students found in {lbl}.")
+                st.info("No students in this category.")
+        
+        # --- DI TABLE ---
+        with st.expander("📗 View DI (Distinction) Students", expanded=False):
+            data, label = get_category_data('DI')
+            st.caption(f"Showing: **{label}**")
+            if not data.empty:
+                render_dynamic_table(data)
+            else:
+                st.info("No students in this category.")
+        
+        # --- HD TABLE ---
+        with st.expander("🌟 View HD (High Distinction) Students", expanded=False):
+            data, label = get_category_data('HD')
+            st.caption(f"Showing: **{label}**")
+            if not data.empty:
+                render_dynamic_table(data)
+            else:
+                st.info("No students in this category.")
 
         # --- CUSP TABLE ---
         with st.expander("🔎 View Cusp Students (Original Grades)", expanded=False):
             st.markdown("Students sitting on **49%, 59%, 69%, 79%** boundaries (Original Marks).")
-            # Cusp is always based on Original Score because that's who we want to bump
             cusp_df = analysis_df[analysis_df['Is_Cusp_Original'] == True].sort_values(by='Pct_Original', ascending=False)
             
             if not cusp_df.empty:
