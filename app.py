@@ -19,10 +19,7 @@ ORDERED_CATS = ['NN', 'PA', 'CR', 'DI', 'HD']
 
 def categorize_percentage(pct):
     if pd.isna(pct): return 'NN'
-    # Round to nearest whole number to match standard grading conventions
-    # e.g., 49.5 -> 50 (PA), 49.4 -> 49 (NN)
     pct = round(pct)
-    
     if pct >= BOUNDARIES['HD']: return 'HD'
     elif pct >= BOUNDARIES['DI']: return 'DI'
     elif pct >= BOUNDARIES['CR']: return 'CR'
@@ -33,14 +30,12 @@ def is_cusp(pct):
     if pd.isna(pct): return False
     rounded = round(pct)
     for grade, boundary in BOUNDARIES.items():
-        # Check if score is boundary - 1 (e.g., 49, 59, 69, 79)
         if boundary > 0 and rounded == (boundary - 1):
             return True
     return False
 
 # --- UI HEADER ---
 st.title("🎓 Automated Grade Moderation Tool")
-st.markdown("Upload **Canvas CSV**. View graphs for **Marks** or **Grade Categories**.")
 
 # --- SIDEBAR: CONTROLS ---
 with st.sidebar:
@@ -83,6 +78,12 @@ if uploaded_file is not None:
         else:
             df_clean = df.copy()
 
+        # --- NEW: REMOVE TEST STUDENT ---
+        if 'Student' in df_clean.columns:
+            # Filter out "Student, Test" or anything containing "Test Student"
+            df_clean = df_clean[~df_clean['Student'].astype(str).str.contains("Test Student", case=False, na=False)]
+            df_clean = df_clean[~df_clean['Student'].astype(str).str.contains("Student, Test", case=False, na=False)]
+
         # Convert columns to numeric
         numeric_cols = []
         for col in df_clean.columns:
@@ -101,19 +102,15 @@ if uploaded_file is not None:
         col_sel, mode_sel = st.columns([2, 1])
         
         with col_sel:
-            # Sort columns to make finding "Unposted Final Score" easier
-            # We put columns containing "Final Score" or "Score" at the top
             def sort_priority(c):
                 if "Unposted Final Score" in c: return 0
                 if "Final Score" in c: return 1
                 return 2
-            
             sorted_cols = sorted(numeric_cols, key=sort_priority)
             
             score_col = st.selectbox(
                 "Select Assignment / Column to Moderate:", 
-                sorted_cols,
-                help="Choose any assignment (e.g., A1, A2) or the Final Score."
+                sorted_cols
             )
 
         # Determine Max Points
@@ -126,7 +123,6 @@ if uploaded_file is not None:
         with mode_sel:
             manual_max = st.number_input("Max Points Possible", value=float(max_score))
             max_score = manual_max
-            # View Mode: Default to Percentage for the Category Graph
             view_mode = st.radio("Graph Distribution As:", ["Category Bar Chart", "Score Histogram"], horizontal=True)
 
         # 3. CALCULATIONS
@@ -136,6 +132,9 @@ if uploaded_file is not None:
             
         analysis_df = df_clean[cols_to_keep].copy().dropna(subset=[score_col])
         analysis_df.rename(columns={score_col: 'Raw_Original'}, inplace=True)
+        
+        # --- NEW: COUNT TOTAL STUDENTS ---
+        total_students = len(analysis_df)
         
         if max_score == 0: max_score = 100 
         
@@ -162,8 +161,9 @@ if uploaded_file is not None:
         # 4. VISUALIZATION
         st.subheader(f"Analysis: {score_col}")
         
-        # Summary Metrics
-        m1, m2, m3, m4 = st.columns(4)
+        # Summary Metrics (Added Total Students)
+        m0, m1, m2, m3, m4 = st.columns(5)
+        m0.metric("Total Students", f"{total_students}")
         m1.metric("Original Average", f"{analysis_df['Pct_Original'].mean():.2f}%")
         m2.metric("Original Std Dev", f"{analysis_df['Pct_Original'].std():.2f}")
         m3.metric("Projected Average", f"{analysis_df['Pct_Adjusted'].mean():.2f}%")
@@ -176,7 +176,6 @@ if uploaded_file is not None:
             fig = go.Figure()
             
             if view_mode == "Category Bar Chart":
-                # Calculate counts per category based on ORDERED list
                 orig_counts = analysis_df['Cat_Original'].value_counts().reindex(ORDERED_CATS, fill_value=0)
                 adj_counts = analysis_df['Cat_Adjusted'].value_counts().reindex(ORDERED_CATS, fill_value=0)
                 
@@ -190,13 +189,12 @@ if uploaded_file is not None:
                 ))
                 fig.update_layout(
                     title="Grade Category Distribution",
-                    xaxis_title="Category (NN=Fail, PA=Pass, CR=Credit, DI=Distinction, HD=High Dist)",
+                    xaxis_title="Category",
                     yaxis_title="Number of Students",
                     barmode='group'
                 )
 
             else:
-                # Continuous Histogram
                 fig.add_trace(go.Histogram(
                     x=analysis_df['Pct_Original'], 
                     name='Original', opacity=0.6, marker_color='gray',
@@ -207,8 +205,6 @@ if uploaded_file is not None:
                     name='Bell Curved', opacity=0.6, marker_color='#0068C9',
                     xbins=dict(start=0, end=100, size=5)
                 ))
-                
-                # Add Boundary Lines
                 for name, val in BOUNDARIES.items():
                     if val > 0:
                         fig.add_vline(x=val, line_width=1, line_dash="dash", line_color="black", annotation_text=name)
@@ -239,15 +235,28 @@ if uploaded_file is not None:
         # 5. DETAILED TABLES
         st.divider()
         
-        # Fail Table
-        with st.expander("🚨 View NN (Fail) Students", expanded=True):
-            nn_df = analysis_df[analysis_df['Cat_Adjusted'] == 'NN'].copy()
-            if not nn_df.empty:
-                nn_display = nn_df[[s_num_col, 'Student', 'Raw_Original', 'Raw_Adjusted', 'Cat_Adjusted']].copy()
-                nn_display.columns = ['S-Number', 'Name', 'Old Mark', 'New Mark', 'Grade']
-                st.dataframe(nn_display)
+        # --- NEW: COMBINED NN & PA TABLE ---
+        with st.expander("🚨 View 'At Risk' (NN) & 'Pass' (PA) Students", expanded=True):
+            st.markdown("""**Students categorized as Fail (NN) or Pass (PA) after moderation.**""")
+            
+            # Filter for NN or PA
+            risk_df = analysis_df[analysis_df['Cat_Adjusted'].isin(['NN', 'PA'])].copy()
+            
+            if not risk_df.empty:
+                # Sort by score (ascending) so the lowest marks are at the top
+                risk_df = risk_df.sort_values(by='Pct_Adjusted', ascending=True)
+                
+                risk_display = risk_df[[s_num_col, 'Student', 'Raw_Original', 'Raw_Adjusted', 'Cat_Adjusted']].copy()
+                risk_display.columns = ['S-Number', 'Name', 'Old Mark', 'New Mark', 'Grade']
+                
+                # Apply conditional formatting for easier reading
+                def highlight_fail(row):
+                    color = 'background-color: #ffcccc' if row['Grade'] == 'NN' else ''
+                    return [color] * len(row)
+
+                st.dataframe(risk_display.style.apply(highlight_fail, axis=1))
             else:
-                st.success("No students are failing (NN) after the curve!")
+                st.success("Great news! No students are in the NN or PA categories.")
 
         # Cusp Table
         with st.expander("🔎 View Cusp Students (Original Grades)", expanded=False):
