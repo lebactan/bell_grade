@@ -69,7 +69,7 @@ with st.sidebar:
                     break
             
             if points_row_index != -1:
-                st.toast("Canvas format detected.", icon="chk")
+                st.toast("Canvas format detected.", icon="✅")
                 for col in df.columns:
                     try:
                         max_points_map[col] = float(df.iloc[points_row_index][col])
@@ -129,7 +129,7 @@ with st.sidebar:
         if st.button("⚡ Apply Gentle Boost (Avg +1.5)", help="Sets Target Mean to Current + 1.5 and keeps Std Dev same."):
             st.session_state.tgt_mean = float(orig_mean + 1.5)
             st.session_state.tgt_std = float(orig_std)
-            st.toast(f"Targets set: Mean {st.session_state.tgt_mean:.1f}, Std {st.session_state.tgt_std:.1f}")
+            st.toast(f"Targets set: Mean {st.session_state.tgt_mean:.1f}, Std {st.session_state.tgt_std:.1f}", icon="✅")
 
     # INPUTS LINKED TO SESSION STATE
     target_mean = st.number_input("Target Mean (%)", key='tgt_mean', step=0.5)
