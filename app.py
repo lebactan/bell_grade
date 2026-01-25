@@ -48,20 +48,25 @@ with st.sidebar:
     
     st.divider()
     st.header("3. Advanced Logic")
-    # --- NEW CHECKBOX FOR SOFT FAILS ---
-    avoid_soft_fails = st.checkbox(
-        "Avoid Soft Fails (45-49%)", 
+    
+    # --- NEW CHECKBOX FOR CUSP AVOIDANCE ---
+    avoid_cusps = st.checkbox(
+        "Avoid Cusp Grades (Auto-Bump)", 
         value=False,
-        help="Automatically move students out of the 45-49% range. They will either Pass (50%) or Fail (44%)."
+        help="Enable logic to eliminate cusp grades (e.g., 48->50, 47->44, 59->60, etc.)"
     )
     
-    if avoid_soft_fails:
-        soft_fail_threshold = st.slider(
-            "Auto-Pass Threshold", 
-            min_value=45, max_value=50, value=48,
-            help="Grades >= this value become 50%. Lower values drop to 44%."
+    if avoid_cusps:
+        st.info(
+            """
+            **Logic Applied:**
+            * 48-49 ➔ 50 (Pass)
+            * 45-47 ➔ 44 (Fail)
+            * 58-59 ➔ 60 (CR)
+            * 68-69 ➔ 70 (DI)
+            * 78-79 ➔ 80 (HD)
+            """
         )
-        st.caption(f"Logic: Grades {soft_fail_threshold}-49 ➔ 50%. Grades 45-{soft_fail_threshold-1} ➔ 44%.")
 
     st.divider()
     st.header("4. View Options")
@@ -169,20 +174,29 @@ if uploaded_file is not None:
             
         analysis_df['Pct_Adjusted'] = analysis_df['Pct_Adjusted'].clip(0, 100)
         
-        # --- APPLY SOFT FAIL LOGIC (45-49%) ---
-        if avoid_soft_fails:
-            def clean_soft_fails(pct):
+        # --- APPLY CUSP AVOIDANCE LOGIC ---
+        if avoid_cusps:
+            def clean_cusps(pct):
                 rounded = round(pct)
-                if 45 <= rounded <= 49:
-                    if rounded >= soft_fail_threshold:
-                        return 50.0 # Pass
-                    else:
-                        return 44.0 # Fail (Below 45)
+                
+                # FAIL/PASS
+                if 45 <= rounded <= 47: return 44.0
+                if 48 <= rounded <= 49: return 50.0
+                
+                # CREDIT
+                if 58 <= rounded <= 59: return 60.0
+                
+                # DISTINCTION
+                if 68 <= rounded <= 69: return 70.0
+                
+                # HIGH DISTINCTION
+                if 78 <= rounded <= 79: return 80.0
+                
                 return pct
             
-            analysis_df['Pct_Adjusted'] = analysis_df['Pct_Adjusted'].apply(clean_soft_fails)
+            analysis_df['Pct_Adjusted'] = analysis_df['Pct_Adjusted'].apply(clean_cusps)
 
-        # Calculate Final Raw Score from Adjusted Pct
+        # Calculate Final Raw Score
         analysis_df['Raw_Adjusted'] = (analysis_df['Pct_Adjusted'] / 100) * max_score
         
         # Categorize
@@ -218,10 +232,12 @@ if uploaded_file is not None:
                 fig.add_trace(go.Histogram(x=analysis_df['Pct_Original'], name='Original', opacity=0.6, marker_color='gray'))
                 fig.add_trace(go.Histogram(x=analysis_df['Pct_Adjusted'], name='Bell Curved', opacity=0.6, marker_color='#0068C9'))
                 
-                # Add Lines for Soft Fail Zone
-                if avoid_soft_fails:
-                    fig.add_vrect(x0=45, x1=49, fillcolor="red", opacity=0.1, annotation_text="Void Zone (45-49)", annotation_position="top left")
-                
+                # Visualize Forbidden Zones if enabled
+                if avoid_cusps:
+                    zones = [(45, 49), (58, 59), (68, 69), (78, 79)]
+                    for z in zones:
+                         fig.add_vrect(x0=z[0], x1=z[1], fillcolor="red", opacity=0.1, annotation_text="Gap", annotation_position="top left")
+
                 fig.update_layout(barmode='overlay')
             st.plotly_chart(fig, use_container_width=True)
 
@@ -286,7 +302,6 @@ if uploaded_file is not None:
         # --- TABLES FOR EACH CATEGORY ---
         for cat in ['NN', 'PA', 'CR', 'DI', 'HD']:
             expanded_state = True if cat in ['NN', 'PA'] else False
-            
             with st.expander(f"View {cat} Students", expanded=expanded_state):
                 data, label = get_category_data(cat)
                 st.caption(f"Showing: **{label}**")
