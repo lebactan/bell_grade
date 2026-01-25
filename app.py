@@ -6,7 +6,7 @@ import numpy as np
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Grade Moderator Pro", layout="wide")
 
-# Correct Grade Boundaries
+# Grade Boundaries
 BOUNDARIES = {
     'HD': 80, # 80-100
     'DI': 70, # 70-79
@@ -48,7 +48,12 @@ with st.sidebar:
     
     st.divider()
     st.header("3. View Options")
-    show_new_marks = st.checkbox("Show Projected (New) Marks", value=True, help="Toggle to show/hide the numeric 'New Mark' column.")
+    # UPDATED CHECKBOX LOGIC
+    show_new_marks = st.checkbox(
+        "Show Projected (New) Marks", 
+        value=True, 
+        help="Check to add 'New Mark' & 'New Category' columns. Uncheck to see only Original data."
+    )
 
 # --- MAIN APP ---
 if uploaded_file is not None:
@@ -109,7 +114,6 @@ if uploaded_file is not None:
                 if "Final Score" in c: return 1
                 return 2
             sorted_cols = sorted(numeric_cols, key=sort_priority)
-            
             score_col = st.selectbox("Select Assignment / Column to Moderate:", sorted_cols)
 
         # Determine Max Points
@@ -173,95 +177,4 @@ if uploaded_file is not None:
                 orig_counts = analysis_df['Cat_Original'].value_counts().reindex(ORDERED_CATS, fill_value=0)
                 adj_counts = analysis_df['Cat_Adjusted'].value_counts().reindex(ORDERED_CATS, fill_value=0)
                 
-                fig.add_trace(go.Bar(name='Original', x=ORDERED_CATS, y=orig_counts, marker_color='gray', opacity=0.7))
-                fig.add_trace(go.Bar(name='Bell Curved', x=ORDERED_CATS, y=adj_counts, marker_color='#0068C9', opacity=0.7))
-                fig.update_layout(title="Grade Category Distribution", barmode='group')
-            else:
-                fig.add_trace(go.Histogram(x=analysis_df['Pct_Original'], name='Original', opacity=0.6, marker_color='gray'))
-                fig.add_trace(go.Histogram(x=analysis_df['Pct_Adjusted'], name='Bell Curved', opacity=0.6, marker_color='#0068C9'))
-                fig.update_layout(barmode='overlay')
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col2:
-            st.write("#### Migration Table")
-            orig_counts = analysis_df['Cat_Original'].value_counts().reindex(ORDERED_CATS, fill_value=0)
-            adj_counts = analysis_df['Cat_Adjusted'].value_counts().reindex(ORDERED_CATS, fill_value=0)
-            diff_df = pd.DataFrame({'Original': orig_counts, 'New': adj_counts, 'Change': adj_counts - orig_counts})
-            
-            def color_diff(val):
-                return 'color: green' if val > 0 else 'color: red' if val < 0 else 'color: gray'
-            st.dataframe(diff_df.style.map(color_diff, subset=['Change']))
-
-        # 5. DETAILED TABLES
-        st.divider()
-        
-        # --- SMART COLUMN LOGIC ---
-        base_cols = [s_num_col, 'Student', 'Raw_Original']
-        display_cols = ['S-Number', 'Name', 'Old Mark']
-        
-        if show_new_marks:
-            base_cols.extend(['Raw_Adjusted', 'Cat_Adjusted'])
-            display_cols.extend(['New Mark', 'New Grade'])
-        else:
-            # If hiding new marks, show Old Grade AND Projected Grade to explain discrepancies
-            base_cols.extend(['Cat_Original', 'Cat_Adjusted'])
-            display_cols.extend(['Original Grade', 'Projected Grade'])
-
-        # --- NN TABLE ---
-        with st.expander("🚨 View NN (Fail) Students", expanded=True):
-            nn_df = analysis_df[analysis_df['Cat_Adjusted'] == 'NN'].copy()
-            if not nn_df.empty:
-                nn_df = nn_df.sort_values(by='Pct_Adjusted', ascending=True)
-                nn_display = nn_df[base_cols].copy()
-                nn_display.columns = display_cols
-                st.write("Tip: Drag mouse to select rows and copy.")
-                st.table(nn_display)
-            else:
-                st.success("No students are failing (NN) after the curve!")
-
-        # --- PA TABLE ---
-        with st.expander("⚠️ View PA (Pass) Students", expanded=True):
-            pa_df = analysis_df[analysis_df['Cat_Adjusted'] == 'PA'].copy()
-            if not pa_df.empty:
-                pa_df = pa_df.sort_values(by='Pct_Adjusted', ascending=True)
-                pa_display = pa_df[base_cols].copy()
-                pa_display.columns = display_cols
-                st.write("Tip: Drag mouse to select rows and copy.")
-                st.table(pa_display)
-            else:
-                st.success("No students are in the PA category.")
-
-        # --- CUSP TABLE ---
-        with st.expander("🔎 View Cusp Students (Original Grades)", expanded=False):
-            st.markdown("Students sitting on **49%, 59%, 69%, 79%** boundaries (Original Marks).")
-            cusp_view = analysis_df[analysis_df['Is_Cusp_Original'] == True].sort_values(by='Pct_Original', ascending=False)
-            
-            # Cusp always needs Original Grade context
-            c_base = [s_num_col, 'Student', 'Raw_Original']
-            c_disp = ['S-Number', 'Name', 'Old Mark']
-            
-            if show_new_marks:
-                c_base.extend(['Raw_Adjusted', 'Cat_Original'])
-                c_disp.extend(['New Mark', 'Old Grade'])
-            else:
-                c_base.extend(['Cat_Original', 'Cat_Adjusted'])
-                c_disp.extend(['Old Grade', 'Projected Grade'])
-            
-            cusp_display = cusp_view[c_base].copy()
-            cusp_display.columns = c_disp
-            st.table(cusp_display)
-
-        # 6. EXPORT
-        export_df = df_clean.copy()
-        export_df.loc[analysis_df.index, f'{score_col} (Curved Raw)'] = analysis_df['Raw_Adjusted'].round(2)
-        export_df.loc[analysis_df.index, f'{score_col} (Curved %)'] = analysis_df['Pct_Adjusted'].round(1)
-        export_df.loc[analysis_df.index, f'{score_col} (New Grade)'] = analysis_df['Cat_Adjusted']
-
-        csv_data = export_df.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Moderated CSV", csv_data, 'moderated_grades.csv', 'text/csv', type="primary")
-
-    except Exception as e:
-        st.error(f"Error processing file: {e}")
-        st.exception(e)
-else:
-    st.info("Please upload a CSV file to proceed.")
+                fig.add_trace(go.Bar(name='Original', x=ORDERED_CATS, y=orig_counts, marker_color='gray', opacity=0.7, text=orig_counts, textposition='auto'))
