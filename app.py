@@ -178,3 +178,95 @@ if uploaded_file is not None:
                 adj_counts = analysis_df['Cat_Adjusted'].value_counts().reindex(ORDERED_CATS, fill_value=0)
                 
                 fig.add_trace(go.Bar(name='Original', x=ORDERED_CATS, y=orig_counts, marker_color='gray', opacity=0.7, text=orig_counts, textposition='auto'))
+                fig.add_trace(go.Bar(name='Bell Curved', x=ORDERED_CATS, y=adj_counts, marker_color='#0068C9', opacity=0.7, text=adj_counts, textposition='auto'))
+                fig.update_layout(title="Grade Category Distribution", barmode='group')
+            else:
+                fig.add_trace(go.Histogram(x=analysis_df['Pct_Original'], name='Original', opacity=0.6, marker_color='gray'))
+                fig.add_trace(go.Histogram(x=analysis_df['Pct_Adjusted'], name='Bell Curved', opacity=0.6, marker_color='#0068C9'))
+                fig.update_layout(barmode='overlay')
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            st.write("#### Migration Table")
+            orig_counts = analysis_df['Cat_Original'].value_counts().reindex(ORDERED_CATS, fill_value=0)
+            adj_counts = analysis_df['Cat_Adjusted'].value_counts().reindex(ORDERED_CATS, fill_value=0)
+            diff_df = pd.DataFrame({'Original': orig_counts, 'New': adj_counts, 'Change': adj_counts - orig_counts})
+            
+            def color_diff(val):
+                return 'color: green' if val > 0 else 'color: red' if val < 0 else 'color: gray'
+            st.dataframe(diff_df.style.map(color_diff, subset=['Change']))
+
+        # 5. DETAILED TABLES WITH STYLING
+        st.divider()
+        
+        # --- Helper Function to Render Styled Tables ---
+        def render_styled_table(data_subset):
+            # 1. Create the base DataFrame with ALL columns needed for comparison
+            # We will hide the 'New' columns later if unchecked
+            display_cols = [s_num_col, 'Student', 'Raw_Original', 'Cat_Original', 'Raw_Adjusted', 'Cat_Adjusted']
+            final_df = data_subset[display_cols].copy()
+            final_df.columns = ['S-Number', 'Name', 'Old Mark', 'Original Category', 'New Mark', 'New Category']
+            
+            # 2. Define Highlighting Logic
+            def highlight_change(row):
+                # If categories differ, apply red background
+                if row['Original Category'] != row['New Category']:
+                    return ['background-color: #ffcccc; color: black'] * len(row)
+                else:
+                    return [''] * len(row)
+            
+            # 3. Apply Style
+            styler = final_df.style.apply(highlight_change, axis=1)
+            
+            # 4. Format Numbers
+            styler.format({'Old Mark': '{:.2f}', 'New Mark': '{:.2f}'})
+            
+            # 5. Hide Columns if Checkbox is Unchecked
+            if not show_new_marks:
+                styler.hide(['New Mark', 'New Category'], axis="columns")
+                
+            # 6. Render
+            st.write("Tip: Drag mouse to select rows and copy.")
+            st.table(styler)
+
+        # --- NN TABLE ---
+        with st.expander("🚨 View NN (Fail) Students", expanded=True):
+            # Filter for students who ARE failing in the NEW adjusted grade
+            nn_df = analysis_df[analysis_df['Cat_Adjusted'] == 'NN'].sort_values(by='Pct_Adjusted', ascending=True)
+            if not nn_df.empty:
+                render_styled_table(nn_df)
+            else:
+                st.success("No students are failing (NN) after the curve!")
+
+        # --- PA TABLE ---
+        with st.expander("⚠️ View PA (Pass) Students", expanded=True):
+            # Filter for students who ARE passing in the NEW adjusted grade
+            pa_df = analysis_df[analysis_df['Cat_Adjusted'] == 'PA'].sort_values(by='Pct_Adjusted', ascending=True)
+            if not pa_df.empty:
+                render_styled_table(pa_df)
+            else:
+                st.success("No students are in the PA category.")
+
+        # --- CUSP TABLE ---
+        with st.expander("🔎 View Cusp Students (Original Grades)", expanded=False):
+            st.markdown("Students sitting on **49%, 59%, 69%, 79%** boundaries (Original Marks).")
+            cusp_df = analysis_df[analysis_df['Is_Cusp_Original'] == True].sort_values(by='Pct_Original', ascending=False)
+            if not cusp_df.empty:
+                render_styled_table(cusp_df)
+            else:
+                st.info("No students found on cusp boundaries.")
+
+        # 6. EXPORT
+        export_df = df_clean.copy()
+        export_df.loc[analysis_df.index, f'{score_col} (Curved Raw)'] = analysis_df['Raw_Adjusted'].round(2)
+        export_df.loc[analysis_df.index, f'{score_col} (Curved %)'] = analysis_df['Pct_Adjusted'].round(1)
+        export_df.loc[analysis_df.index, f'{score_col} (New Grade)'] = analysis_df['Cat_Adjusted']
+
+        csv_data = export_df.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Moderated CSV", csv_data, 'moderated_grades.csv', 'text/csv', type="primary")
+
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
+        st.exception(e)
+else:
+    st.info("Please upload a CSV file to proceed.")
