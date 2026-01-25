@@ -141,3 +141,187 @@ if uploaded_file is not None:
         
         with mode_sel:
             manual_max = st.number_input("Max Points Possible", value=float(max_score))
+            max_score = manual_max
+            view_mode = st.radio("Graph Distribution As:", ["Category Bar Chart", "Score Histogram"], horizontal=True)
+
+        # 3. CALCULATIONS
+        s_num_col = 'SIS Login ID' if 'SIS Login ID' in df_clean.columns else 'ID'
+        cols_to_keep = ['Student', 'ID', score_col]
+        if s_num_col not in cols_to_keep: cols_to_keep.append(s_num_col)
+            
+        analysis_df = df_clean[cols_to_keep].copy().dropna(subset=[score_col])
+        analysis_df.rename(columns={score_col: 'Raw_Original'}, inplace=True)
+        
+        total_students = len(analysis_df)
+        if max_score == 0: max_score = 100 
+        
+        # Calculate Percentage
+        analysis_df['Pct_Original'] = (analysis_df['Raw_Original'] / max_score) * 100
+        
+        # Apply Bell Curve
+        cur_mean = analysis_df['Pct_Original'].mean()
+        cur_std = analysis_df['Pct_Original'].std()
+        
+        if cur_std == 0:
+            analysis_df['Pct_Adjusted'] = analysis_df['Pct_Original']
+        else:
+            analysis_df['Pct_Adjusted'] = target_mean + (analysis_df['Pct_Original'] - cur_mean) * (target_std / cur_std)
+            
+        analysis_df['Pct_Adjusted'] = analysis_df['Pct_Adjusted'].clip(0, 100)
+        
+        # --- APPLY SOFT FAIL LOGIC (45-49%) ---
+        if avoid_soft_fails:
+            def clean_soft_fails(pct):
+                rounded = round(pct)
+                if 45 <= rounded <= 49:
+                    if rounded >= soft_fail_threshold:
+                        return 50.0 # Pass
+                    else:
+                        return 44.0 # Fail (Below 45)
+                return pct
+            
+            analysis_df['Pct_Adjusted'] = analysis_df['Pct_Adjusted'].apply(clean_soft_fails)
+
+        # Calculate Final Raw Score from Adjusted Pct
+        analysis_df['Raw_Adjusted'] = (analysis_df['Pct_Adjusted'] / 100) * max_score
+        
+        # Categorize
+        analysis_df['Cat_Original'] = analysis_df['Pct_Original'].apply(categorize_percentage)
+        analysis_df['Cat_Adjusted'] = analysis_df['Pct_Adjusted'].apply(categorize_percentage)
+        
+        # Cusp Calculations
+        analysis_df['Is_Cusp_Original'] = analysis_df['Pct_Original'].apply(is_cusp)
+        analysis_df['Is_Cusp_Adjusted'] = analysis_df['Pct_Adjusted'].apply(is_cusp)
+
+        # 4. VISUALIZATION
+        st.subheader(f"Analysis: {score_col}")
+        
+        m0, m1, m2, m3, m4 = st.columns(5)
+        m0.metric("Total Students", f"{total_students}")
+        m1.metric("Original Average", f"{analysis_df['Pct_Original'].mean():.2f}%")
+        m2.metric("Original Std Dev", f"{analysis_df['Pct_Original'].std():.2f}")
+        m3.metric("Projected Average", f"{analysis_df['Pct_Adjusted'].mean():.2f}%")
+        m4.metric("Projected Std Dev", f"{analysis_df['Pct_Adjusted'].std():.2f}")
+
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            fig = go.Figure()
+            if view_mode == "Category Bar Chart":
+                orig_counts = analysis_df['Cat_Original'].value_counts().reindex(ORDERED_CATS, fill_value=0)
+                adj_counts = analysis_df['Cat_Adjusted'].value_counts().reindex(ORDERED_CATS, fill_value=0)
+                
+                fig.add_trace(go.Bar(name='Original', x=ORDERED_CATS, y=orig_counts, marker_color='gray', opacity=0.7, text=orig_counts, textposition='auto'))
+                fig.add_trace(go.Bar(name='Bell Curved', x=ORDERED_CATS, y=adj_counts, marker_color='#0068C9', opacity=0.7, text=adj_counts, textposition='auto'))
+                fig.update_layout(title="Grade Category Distribution", barmode='group')
+            else:
+                fig.add_trace(go.Histogram(x=analysis_df['Pct_Original'], name='Original', opacity=0.6, marker_color='gray'))
+                fig.add_trace(go.Histogram(x=analysis_df['Pct_Adjusted'], name='Bell Curved', opacity=0.6, marker_color='#0068C9'))
+                
+                # Add Lines for Soft Fail Zone
+                if avoid_soft_fails:
+                    fig.add_vrect(x0=45, x1=49, fillcolor="red", opacity=0.1, annotation_text="Void Zone (45-49)", annotation_position="top left")
+                
+                fig.update_layout(barmode='overlay')
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            st.write("#### Migration Table")
+            orig_counts = analysis_df['Cat_Original'].value_counts().reindex(ORDERED_CATS, fill_value=0)
+            adj_counts = analysis_df['Cat_Adjusted'].value_counts().reindex(ORDERED_CATS, fill_value=0)
+            
+            orig_pct = (orig_counts / total_students * 100).round(1).astype(str) + '%'
+            adj_pct = (adj_counts / total_students * 100).round(1).astype(str) + '%'
+            
+            diff_df = pd.DataFrame({
+                'Original': orig_counts,
+                'Original %': orig_pct,
+                'New': adj_counts,
+                'New %': adj_pct,
+                'Change': adj_counts - orig_counts
+            })
+            
+            def color_diff(val):
+                return 'color: green' if val > 0 else 'color: red' if val < 0 else 'color: gray'
+            st.dataframe(diff_df.style.map(color_diff, subset=['Change']))
+
+        # 5. DETAILED TABLES WITH STYLING
+        st.divider()
+        
+        def render_dynamic_table(data_full):
+            cols = [s_num_col, 'Student', 'Raw_Original', 'Cat_Original']
+            headers = ['S-Number', 'Name', 'Old Mark', 'Original Category']
+            
+            if show_new_marks:
+                cols.extend(['Raw_Adjusted', 'Cat_Adjusted'])
+                headers.extend(['New Mark', 'New Category'])
+
+            display_df = data_full[cols].copy()
+            display_df.columns = headers
+            
+            def highlight_row(row):
+                if show_new_marks and (row['Original Category'] != row['New Category']):
+                    return ['background-color: #ffcccc; color: black'] * len(row)
+                return [''] * len(row)
+            
+            styler = display_df.style.apply(highlight_row, axis=1)
+            
+            format_dict = {'Old Mark': '{:.2f}'}
+            if 'New Mark' in display_df.columns:
+                format_dict['New Mark'] = '{:.2f}'
+            styler.format(format_dict)
+            
+            st.write("Tip: Drag mouse to select rows and copy.")
+            st.table(styler)
+            
+        def get_category_data(cat_name):
+            if show_new_marks:
+                df_sub = analysis_df[analysis_df['Cat_Adjusted'] == cat_name].sort_values(by='Pct_Adjusted', ascending=True)
+                lbl = f"Projected {cat_name} (Post-Curve)"
+            else:
+                df_sub = analysis_df[analysis_df['Cat_Original'] == cat_name].sort_values(by='Pct_Original', ascending=True)
+                lbl = f"Original {cat_name} (Pre-Curve)"
+            return df_sub, lbl
+
+        # --- TABLES FOR EACH CATEGORY ---
+        for cat in ['NN', 'PA', 'CR', 'DI', 'HD']:
+            expanded_state = True if cat in ['NN', 'PA'] else False
+            
+            with st.expander(f"View {cat} Students", expanded=expanded_state):
+                data, label = get_category_data(cat)
+                st.caption(f"Showing: **{label}**")
+                if not data.empty:
+                    render_dynamic_table(data)
+                else:
+                    st.success(f"No students in {cat}.")
+
+        # --- CUSP TABLE ---
+        with st.expander("🔎 View Cusp Students", expanded=False):
+            if show_new_marks:
+                cusp_df = analysis_df[analysis_df['Is_Cusp_Adjusted'] == True].sort_values(by='Pct_Adjusted', ascending=False)
+                lbl = "Projected Cusp (Post-Curve)"
+            else:
+                cusp_df = analysis_df[analysis_df['Is_Cusp_Original'] == True].sort_values(by='Pct_Original', ascending=False)
+                lbl = "Original Cusp (Pre-Curve)"
+            
+            st.caption(f"Showing: **{lbl}** (49, 59, 69, 79)")
+            
+            if not cusp_df.empty:
+                render_dynamic_table(cusp_df)
+            else:
+                st.info("No students found on cusp boundaries.")
+
+        # 6. EXPORT
+        export_df = df_clean.copy()
+        export_df.loc[analysis_df.index, f'{score_col} (Curved Raw)'] = analysis_df['Raw_Adjusted'].round(2)
+        export_df.loc[analysis_df.index, f'{score_col} (Curved %)'] = analysis_df['Pct_Adjusted'].round(1)
+        export_df.loc[analysis_df.index, f'{score_col} (New Grade)'] = analysis_df['Cat_Adjusted']
+
+        csv_data = export_df.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Moderated CSV", csv_data, 'moderated_grades.csv', 'text/csv', type="primary")
+
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
+        st.exception(e)
+else:
+    st.info("Please upload a CSV file to proceed.")
