@@ -43,7 +43,6 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Upload Grades CSV", type=["csv"])
     
     st.header("2. Bell Curve Targets")
-    st.caption("Define the target curve in Percentages (0-100%).")
     target_mean = st.number_input("Target Mean (%)", value=65.0, step=1.0)
     target_std = st.number_input("Target Std Dev", value=15.0, step=1.0)
 
@@ -78,9 +77,8 @@ if uploaded_file is not None:
         else:
             df_clean = df.copy()
 
-        # --- NEW: REMOVE TEST STUDENT ---
+        # Remove Test Student
         if 'Student' in df_clean.columns:
-            # Filter out "Student, Test" or anything containing "Test Student"
             df_clean = df_clean[~df_clean['Student'].astype(str).str.contains("Test Student", case=False, na=False)]
             df_clean = df_clean[~df_clean['Student'].astype(str).str.contains("Student, Test", case=False, na=False)]
 
@@ -121,7 +119,12 @@ if uploaded_file is not None:
             max_score = 100.0
         
         with mode_sel:
-            manual_max = st.number_input("Max Points Possible", value=float(max_score))
+            # Explanation for Max Points
+            manual_max = st.number_input(
+                "Max Points Possible", 
+                value=float(max_score),
+                help="CRITICAL: Used to convert raw marks (e.g. 15) into percentages (e.g. 75% if max is 20). If this is wrong, the bell curve will be wrong."
+            )
             max_score = manual_max
             view_mode = st.radio("Graph Distribution As:", ["Category Bar Chart", "Score Histogram"], horizontal=True)
 
@@ -133,12 +136,11 @@ if uploaded_file is not None:
         analysis_df = df_clean[cols_to_keep].copy().dropna(subset=[score_col])
         analysis_df.rename(columns={score_col: 'Raw_Original'}, inplace=True)
         
-        # --- NEW: COUNT TOTAL STUDENTS ---
         total_students = len(analysis_df)
         
         if max_score == 0: max_score = 100 
         
-        # Calculate Percentage
+        # Calculate Percentage (Hidden from view, used for math)
         analysis_df['Pct_Original'] = (analysis_df['Raw_Original'] / max_score) * 100
         
         # Apply Bell Curve
@@ -161,7 +163,6 @@ if uploaded_file is not None:
         # 4. VISUALIZATION
         st.subheader(f"Analysis: {score_col}")
         
-        # Summary Metrics (Added Total Students)
         m0, m1, m2, m3, m4 = st.columns(5)
         m0.metric("Total Students", f"{total_students}")
         m1.metric("Original Average", f"{analysis_df['Pct_Original'].mean():.2f}%")
@@ -169,12 +170,10 @@ if uploaded_file is not None:
         m3.metric("Projected Average", f"{analysis_df['Pct_Adjusted'].mean():.2f}%")
         m4.metric("Projected Std Dev", f"{analysis_df['Pct_Adjusted'].std():.2f}")
 
-        # --- GRAPH SECTION ---
         col1, col2 = st.columns([2, 1])
         
         with col1:
             fig = go.Figure()
-            
             if view_mode == "Category Bar Chart":
                 orig_counts = analysis_df['Cat_Original'].value_counts().reindex(ORDERED_CATS, fill_value=0)
                 adj_counts = analysis_df['Cat_Adjusted'].value_counts().reindex(ORDERED_CATS, fill_value=0)
@@ -187,83 +186,60 @@ if uploaded_file is not None:
                     name='Bell Curved', x=ORDERED_CATS, y=adj_counts, 
                     marker_color='#0068C9', opacity=0.7, text=adj_counts, textposition='auto'
                 ))
-                fig.update_layout(
-                    title="Grade Category Distribution",
-                    xaxis_title="Category",
-                    yaxis_title="Number of Students",
-                    barmode='group'
-                )
-
+                fig.update_layout(title="Grade Category Distribution", barmode='group')
             else:
                 fig.add_trace(go.Histogram(
-                    x=analysis_df['Pct_Original'], 
-                    name='Original', opacity=0.6, marker_color='gray',
+                    x=analysis_df['Pct_Original'], name='Original', opacity=0.6, marker_color='gray',
                     xbins=dict(start=0, end=100, size=5)
                 ))
                 fig.add_trace(go.Histogram(
-                    x=analysis_df['Pct_Adjusted'], 
-                    name='Bell Curved', opacity=0.6, marker_color='#0068C9',
+                    x=analysis_df['Pct_Adjusted'], name='Bell Curved', opacity=0.6, marker_color='#0068C9',
                     xbins=dict(start=0, end=100, size=5)
                 ))
                 for name, val in BOUNDARIES.items():
                     if val > 0:
-                        fig.add_vline(x=val, line_width=1, line_dash="dash", line_color="black", annotation_text=name)
-
-                fig.update_layout(barmode='overlay', xaxis_title="Percentage Score (%)", yaxis_title="Student Count")
-
+                        fig.add_vline(x=val, line_dash="dash", line_color="black")
+                fig.update_layout(barmode='overlay')
             st.plotly_chart(fig, use_container_width=True)
 
         with col2:
             st.write("#### Migration Table")
             orig_counts = analysis_df['Cat_Original'].value_counts().reindex(ORDERED_CATS, fill_value=0)
             adj_counts = analysis_df['Cat_Adjusted'].value_counts().reindex(ORDERED_CATS, fill_value=0)
-            
-            diff_df = pd.DataFrame({
-                'Original': orig_counts,
-                'New': adj_counts,
-                'Change': adj_counts - orig_counts
-            })
+            diff_df = pd.DataFrame({'Original': orig_counts, 'New': adj_counts, 'Change': adj_counts - orig_counts})
             
             def color_diff(val):
                 if val > 0: return 'color: green'
                 elif val < 0: return 'color: red'
                 return 'color: gray'
-
             st.dataframe(diff_df.style.map(color_diff, subset=['Change']))
-            st.caption(f"Original Cusp Students: {analysis_df['Is_Cusp_Original'].sum()}")
 
-        # 5. DETAILED TABLES
+        # 5. DETAILED TABLES (UPDATED FOR EASY COPY)
         st.divider()
         
-        # --- NEW: COMBINED NN & PA TABLE ---
+        # --- AT RISK TABLE ---
         with st.expander("🚨 View 'At Risk' (NN) & 'Pass' (PA) Students", expanded=True):
-            st.markdown("""**Students categorized as Fail (NN) or Pass (PA) after moderation.**""")
-            
-            # Filter for NN or PA
             risk_df = analysis_df[analysis_df['Cat_Adjusted'].isin(['NN', 'PA'])].copy()
-            
             if not risk_df.empty:
-                # Sort by score (ascending) so the lowest marks are at the top
                 risk_df = risk_df.sort_values(by='Pct_Adjusted', ascending=True)
-                
                 risk_display = risk_df[[s_num_col, 'Student', 'Raw_Original', 'Raw_Adjusted', 'Cat_Adjusted']].copy()
                 risk_display.columns = ['S-Number', 'Name', 'Old Mark', 'New Mark', 'Grade']
                 
-                # Apply conditional formatting for easier reading
-                def highlight_fail(row):
-                    color = 'background-color: #ffcccc' if row['Grade'] == 'NN' else ''
-                    return [color] * len(row)
-
-                st.dataframe(risk_display.style.apply(highlight_fail, axis=1))
+                # Use st.table() for static, easy-to-copy HTML
+                st.write("Tip: Drag your mouse over the table to select and copy.")
+                st.table(risk_display)
             else:
-                st.success("Great news! No students are in the NN or PA categories.")
+                st.success("No students are in the NN or PA categories.")
 
-        # Cusp Table
+        # --- CUSP TABLE ---
         with st.expander("🔎 View Cusp Students (Original Grades)", expanded=False):
-            st.markdown("""Students sitting on **49%, 59%, 69%, 79%** boundaries.""")
             cusp_view = analysis_df[analysis_df['Is_Cusp_Original'] == True].sort_values(by='Pct_Original', ascending=False)
-            cusp_cols = [s_num_col, 'Student', 'Raw_Original', 'Pct_Original', 'Cat_Original']
-            st.dataframe(cusp_view[cusp_cols])
+            cusp_cols = [s_num_col, 'Student', 'Raw_Original', 'Cat_Original']
+            cusp_display = cusp_view[cusp_cols].copy()
+            cusp_display.columns = ['S-Number', 'Name', 'Old Mark', 'Old Grade']
+            
+            st.write("Tip: Drag your mouse over the table to select and copy.")
+            st.table(cusp_display)
 
         # Export
         export_df = df_clean.copy()
@@ -274,17 +250,4 @@ if uploaded_file is not None:
         export_df[f'{score_col} (New Grade)'] = np.nan
         export_df.loc[analysis_df.index, f'{score_col} (New Grade)'] = analysis_df['Cat_Adjusted']
 
-        csv = export_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Download Moderated CSV",
-            data=csv,
-            file_name='moderated_grades.csv',
-            mime='text/csv',
-            type="primary"
-        )
-
-    except Exception as e:
-        st.error(f"Error processing file: {e}")
-        st.exception(e)
-else:
-    st.info("Please upload a CSV file to proceed.")
+        csv =
