@@ -250,4 +250,11 @@ if uploaded_file is not None:
         export_df[f'{score_col} (New Grade)'] = np.nan
         export_df.loc[analysis_df.index, f'{score_col} (New Grade)'] = analysis_df['Cat_Adjusted']
 
-        csv =
+        csv = export_df.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Moderated CSV", csv, 'moderated_grades.csv', 'text/csv', type="primary")
+
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
+        st.exception(e)
+else:
+    st.info("Please upload a CSV file to proceed.")
