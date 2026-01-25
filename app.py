@@ -48,8 +48,7 @@ with st.sidebar:
     
     st.divider()
     st.header("3. View Options")
-    # THE CHECKBOX YOU REQUESTED
-    show_new_marks = st.checkbox("Show Projected (New) Marks", value=True, help="Toggle to show/hide the 'New Mark' column in the tables below.")
+    show_new_marks = st.checkbox("Show Projected (New) Marks", value=True, help="Toggle to show/hide the numeric 'New Mark' column.")
 
 # --- MAIN APP ---
 if uploaded_file is not None:
@@ -111,10 +110,7 @@ if uploaded_file is not None:
                 return 2
             sorted_cols = sorted(numeric_cols, key=sort_priority)
             
-            score_col = st.selectbox(
-                "Select Assignment / Column to Moderate:", 
-                sorted_cols
-            )
+            score_col = st.selectbox("Select Assignment / Column to Moderate:", sorted_cols)
 
         # Determine Max Points
         max_score = 100.0
@@ -124,11 +120,7 @@ if uploaded_file is not None:
             max_score = 100.0
         
         with mode_sel:
-            manual_max = st.number_input(
-                "Max Points Possible", 
-                value=float(max_score),
-                help="CRITICAL: Used to convert raw marks into percentages."
-            )
+            manual_max = st.number_input("Max Points Possible", value=float(max_score))
             max_score = manual_max
             view_mode = st.radio("Graph Distribution As:", ["Category Bar Chart", "Score Histogram"], horizontal=True)
 
@@ -141,7 +133,6 @@ if uploaded_file is not None:
         analysis_df.rename(columns={score_col: 'Raw_Original'}, inplace=True)
         
         total_students = len(analysis_df)
-        
         if max_score == 0: max_score = 100 
         
         # Calculate Percentage
@@ -182,27 +173,12 @@ if uploaded_file is not None:
                 orig_counts = analysis_df['Cat_Original'].value_counts().reindex(ORDERED_CATS, fill_value=0)
                 adj_counts = analysis_df['Cat_Adjusted'].value_counts().reindex(ORDERED_CATS, fill_value=0)
                 
-                fig.add_trace(go.Bar(
-                    name='Original', x=ORDERED_CATS, y=orig_counts, 
-                    marker_color='gray', opacity=0.7, text=orig_counts, textposition='auto'
-                ))
-                fig.add_trace(go.Bar(
-                    name='Bell Curved', x=ORDERED_CATS, y=adj_counts, 
-                    marker_color='#0068C9', opacity=0.7, text=adj_counts, textposition='auto'
-                ))
+                fig.add_trace(go.Bar(name='Original', x=ORDERED_CATS, y=orig_counts, marker_color='gray', opacity=0.7))
+                fig.add_trace(go.Bar(name='Bell Curved', x=ORDERED_CATS, y=adj_counts, marker_color='#0068C9', opacity=0.7))
                 fig.update_layout(title="Grade Category Distribution", barmode='group')
             else:
-                fig.add_trace(go.Histogram(
-                    x=analysis_df['Pct_Original'], name='Original', opacity=0.6, marker_color='gray',
-                    xbins=dict(start=0, end=100, size=5)
-                ))
-                fig.add_trace(go.Histogram(
-                    x=analysis_df['Pct_Adjusted'], name='Bell Curved', opacity=0.6, marker_color='#0068C9',
-                    xbins=dict(start=0, end=100, size=5)
-                ))
-                for name, val in BOUNDARIES.items():
-                    if val > 0:
-                        fig.add_vline(x=val, line_dash="dash", line_color="black")
+                fig.add_trace(go.Histogram(x=analysis_df['Pct_Original'], name='Original', opacity=0.6, marker_color='gray'))
+                fig.add_trace(go.Histogram(x=analysis_df['Pct_Adjusted'], name='Bell Curved', opacity=0.6, marker_color='#0068C9'))
                 fig.update_layout(barmode='overlay')
             st.plotly_chart(fig, use_container_width=True)
 
@@ -213,33 +189,29 @@ if uploaded_file is not None:
             diff_df = pd.DataFrame({'Original': orig_counts, 'New': adj_counts, 'Change': adj_counts - orig_counts})
             
             def color_diff(val):
-                if val > 0: return 'color: green'
-                elif val < 0: return 'color: red'
-                return 'color: gray'
+                return 'color: green' if val > 0 else 'color: red' if val < 0 else 'color: gray'
             st.dataframe(diff_df.style.map(color_diff, subset=['Change']))
 
         # 5. DETAILED TABLES
         st.divider()
         
-        # --- DYNAMIC COLUMN SETUP ---
-        # Base columns always shown
+        # --- SMART COLUMN LOGIC ---
         base_cols = [s_num_col, 'Student', 'Raw_Original']
         display_cols = ['S-Number', 'Name', 'Old Mark']
         
-        # Optional columns if Checkbox is True
         if show_new_marks:
-            base_cols.append('Raw_Adjusted')
-            display_cols.append('New Mark')
-            
-        base_cols.append('Cat_Adjusted')
-        display_cols.append('Grade')
+            base_cols.extend(['Raw_Adjusted', 'Cat_Adjusted'])
+            display_cols.extend(['New Mark', 'New Grade'])
+        else:
+            # If hiding new marks, show Old Grade AND Projected Grade to explain discrepancies
+            base_cols.extend(['Cat_Original', 'Cat_Adjusted'])
+            display_cols.extend(['Original Grade', 'Projected Grade'])
 
         # --- NN TABLE ---
         with st.expander("🚨 View NN (Fail) Students", expanded=True):
             nn_df = analysis_df[analysis_df['Cat_Adjusted'] == 'NN'].copy()
             if not nn_df.empty:
                 nn_df = nn_df.sort_values(by='Pct_Adjusted', ascending=True)
-                # Select only the relevant columns
                 nn_display = nn_df[base_cols].copy()
                 nn_display.columns = display_cols
                 st.write("Tip: Drag mouse to select rows and copy.")
@@ -264,41 +236,29 @@ if uploaded_file is not None:
             st.markdown("Students sitting on **49%, 59%, 69%, 79%** boundaries (Original Marks).")
             cusp_view = analysis_df[analysis_df['Is_Cusp_Original'] == True].sort_values(by='Pct_Original', ascending=False)
             
-            # Cusp specific columns (we usually want to see OLD grade for context)
+            # Cusp always needs Original Grade context
             c_base = [s_num_col, 'Student', 'Raw_Original']
             c_disp = ['S-Number', 'Name', 'Old Mark']
             
             if show_new_marks:
-                c_base.append('Raw_Adjusted')
-                c_disp.append('New Mark')
-            
-            c_base.append('Cat_Original')
-            c_disp.append('Old Grade')
+                c_base.extend(['Raw_Adjusted', 'Cat_Original'])
+                c_disp.extend(['New Mark', 'Old Grade'])
+            else:
+                c_base.extend(['Cat_Original', 'Cat_Adjusted'])
+                c_disp.extend(['Old Grade', 'Projected Grade'])
             
             cusp_display = cusp_view[c_base].copy()
             cusp_display.columns = c_disp
-            st.write("Tip: Drag mouse to select rows and copy.")
             st.table(cusp_display)
 
-        # 6. EXPORT LOGIC
+        # 6. EXPORT
         export_df = df_clean.copy()
-        new_raw = analysis_df['Raw_Adjusted'].round(2)
-        new_pct = analysis_df['Pct_Adjusted'].round(1)
-        new_cat = analysis_df['Cat_Adjusted']
-
-        export_df.loc[analysis_df.index, f'{score_col} (Curved Raw)'] = new_raw
-        export_df.loc[analysis_df.index, f'{score_col} (Curved %)'] = new_pct
-        export_df.loc[analysis_df.index, f'{score_col} (New Grade)'] = new_cat
+        export_df.loc[analysis_df.index, f'{score_col} (Curved Raw)'] = analysis_df['Raw_Adjusted'].round(2)
+        export_df.loc[analysis_df.index, f'{score_col} (Curved %)'] = analysis_df['Pct_Adjusted'].round(1)
+        export_df.loc[analysis_df.index, f'{score_col} (New Grade)'] = analysis_df['Cat_Adjusted']
 
         csv_data = export_df.to_csv(index=False).encode('utf-8')
-        
-        st.download_button(
-            label="📥 Download Moderated CSV", 
-            data=csv_data, 
-            file_name='moderated_grades.csv', 
-            mime='text/csv', 
-            type="primary"
-        )
+        st.download_button("📥 Download Moderated CSV", csv_data, 'moderated_grades.csv', 'text/csv', type="primary")
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
