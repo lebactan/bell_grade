@@ -46,7 +46,11 @@ st.title("🎓 Automated Grade Moderation Tool")
 # --- SIDEBAR: CONTROLS ---
 with st.sidebar:
     st.header("1. Upload Data")
-    uploaded_file = st.file_uploader("Upload Grades CSV", type=["csv"])
+    uploaded_file = st.file_uploader(
+        "Upload Grades CSV", 
+        type=["csv"],
+        help="Upload the raw CSV file exported directly from Canvas. It must contain student IDs and numeric grade columns."
+    )
     
     # ---------------------------------------------------------
     # DATA PROCESSING & COLUMN SELECTION (MOVED TO SIDEBAR)
@@ -100,17 +104,24 @@ with st.sidebar:
                     return 2
                 
                 st.header("2. Select Data")
-                score_col = st.selectbox("Column to Moderate:", sorted(numeric_cols, key=sort_priority))
+                score_col = st.selectbox(
+                    "Column to Moderate:", 
+                    sorted(numeric_cols, key=sort_priority),
+                    help="Select the specific assignment or Total column you want to apply the Bell Curve to."
+                )
                 
                 # Auto-detect Max Score
                 detected_max = 100.0
                 if score_col in max_points_map and max_points_map[score_col]:
                     detected_max = max_points_map[score_col]
                 
-                max_score = st.number_input("Max Points Possible", value=float(detected_max))
+                max_score = st.number_input(
+                    "Max Points Possible", 
+                    value=float(detected_max),
+                    help="CRITICAL: The total marks available for this assignment (e.g., 20, 100). This is required to convert raw scores (e.g., 15) into percentages (e.g., 75%) for accurate calculation."
+                )
                 
                 # --- CALCULATE ORIGINAL STATS FOR GENTLE BOOST ---
-                # We need these stats NOW to enable the "Gentle Boost" button logic
                 temp_series = df_clean[score_col].dropna()
                 temp_pct = (temp_series / max_score) * 100
                 orig_mean = temp_pct.mean()
@@ -126,26 +137,54 @@ with st.sidebar:
     
     # GENTLE BOOST BUTTON
     if score_col is not None:
-        if st.button("⚡ Apply Gentle Boost (Avg +1.5)", help="Sets Target Mean to Current + 1.5 and keeps Std Dev same."):
+        if st.button(
+            "⚡ Apply Gentle Boost (Avg +1.5)", 
+            help="One-Click Setup: Automatically sets the Target Mean to (Original + 1.5) and keeps the Std Dev exactly the same. Use this for a subtle boost that doesn't distort the grade distribution."
+        ):
             st.session_state.tgt_mean = float(orig_mean + 1.5)
             st.session_state.tgt_std = float(orig_std)
             st.toast(f"Targets set: Mean {st.session_state.tgt_mean:.1f}, Std {st.session_state.tgt_std:.1f}", icon="✅")
 
     # INPUTS LINKED TO SESSION STATE
-    target_mean = st.number_input("Target Mean (%)", key='tgt_mean', step=0.5)
-    target_std = st.number_input("Target Std Dev", key='tgt_std', step=0.5)
+    target_mean = st.number_input(
+        "Target Mean (%)", 
+        key='tgt_mean', 
+        step=0.5,
+        help="The average score you want the class to have after moderation. Increasing this shifts the entire bell curve to the right (everyone gets higher grades)."
+    )
+    
+    target_std = st.number_input(
+        "Target Std Dev", 
+        key='tgt_std', 
+        step=0.5,
+        help="Controls the spread of the grades. Higher value = wider curve (more HDs and more NNs). Lower value = narrower curve (most students clustered around the average)."
+    )
     
     st.divider()
     st.header("4. Advanced Logic")
     
-    avoid_cusps = st.checkbox("Avoid Cusp Grades (Auto-Bump)", value=False, help="48->50, 47->44, 59->60, etc.")
+    avoid_cusps = st.checkbox(
+        "Avoid Cusp Grades (Auto-Bump)", 
+        value=False,
+        help="Enable this to automatically fix borderline grades AFTER the curve. Logic: 48-49 becomes 50 (Pass); 45-47 becomes 44 (Fail); 58-59 becomes 60 (CR); etc."
+    )
     if avoid_cusps:
         st.info("Logic: 48-49➔50, 45-47➔44, 58-59➔60, 68-69➔70, 78-79➔80")
 
     st.divider()
     st.header("5. View Options")
-    show_new_marks = st.checkbox("Show Projected (New) Marks", value=True)
-    view_mode = st.radio("Graph Distribution As:", ["Category Bar Chart", "Score Histogram"], horizontal=True)
+    show_new_marks = st.checkbox(
+        "Show Projected (New) Marks", 
+        value=True,
+        help="When checked, the tables below show the 'New' marks, 'New' categories, and highlight changes in red. When unchecked, tables show only the Original marks."
+    )
+    
+    view_mode = st.radio(
+        "Graph Distribution As:", 
+        ["Category Bar Chart", "Score Histogram"], 
+        horizontal=True,
+        help="Choose 'Category Bar Chart' to see the count of HD/DI/CR/PA/NN. Choose 'Score Histogram' to see the smooth bell curve shape of scores."
+    )
 
 
 # --- MAIN APP ---
@@ -203,11 +242,11 @@ if uploaded_file is not None and score_col is not None:
         st.subheader(f"Analysis: {score_col}")
         
         m0, m1, m2, m3, m4 = st.columns(5)
-        m0.metric("Total Students", f"{total_students}")
-        m1.metric("Original Average", f"{analysis_df['Pct_Original'].mean():.2f}%")
-        m2.metric("Original Std Dev", f"{analysis_df['Pct_Original'].std():.2f}")
-        m3.metric("Projected Average", f"{analysis_df['Pct_Adjusted'].mean():.2f}%")
-        m4.metric("Projected Std Dev", f"{analysis_df['Pct_Adjusted'].std():.2f}")
+        m0.metric("Total Students", f"{total_students}", help="Number of students with valid grades (excluding Test Student).")
+        m1.metric("Original Average", f"{analysis_df['Pct_Original'].mean():.2f}%", help="The actual class average before any moderation.")
+        m2.metric("Original Std Dev", f"{analysis_df['Pct_Original'].std():.2f}", help="The actual spread of grades before moderation.")
+        m3.metric("Projected Average", f"{analysis_df['Pct_Adjusted'].mean():.2f}%", help="The predicted class average after applying the Bell Curve.")
+        m4.metric("Projected Std Dev", f"{analysis_df['Pct_Adjusted'].std():.2f}", help="The predicted spread of grades after applying the Bell Curve.")
 
         col1, col2 = st.columns([2, 1])
         
@@ -244,9 +283,11 @@ if uploaded_file is not None and score_col is not None:
                 'Change': adj_counts - orig_counts
             })
             
-            def color_diff(val):
-                return 'color: green' if val > 0 else 'color: red' if val < 0 else 'color: gray'
-            st.dataframe(diff_df.style.map(color_diff, subset=['Change']))
+            # Apply style and use st.table for easy copying
+            def highlight_change(val):
+                color = 'green' if val > 0 else 'red' if val < 0 else 'gray'
+                return f'color: {color}'
+            st.table(diff_df.style.map(highlight_change, subset=['Change']))
 
         # 5. DETAILED TABLES
         st.divider()
