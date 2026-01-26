@@ -34,10 +34,19 @@ def categorize_percentage(pct):
 
 def is_cusp(pct):
     if pd.isna(pct): return False
-    # Check decimals precisely (Strictly less than boundary, but within 2 marks)
-    for grade, boundary in BOUNDARIES.items():
-        if boundary > 0 and (boundary - 2) <= pct < boundary:
+    
+    # Updated Cusp Definition:
+    # 1. Fail Cusp: 45.0 <= x < 50.0 (The entire 45-49.9 range)
+    if 45.0 <= pct < 50.0:
+        return True
+        
+    # 2. Standard Cusp (within 2 marks of other boundaries)
+    # 58-60, 68-70, 78-80
+    for grade in ['CR', 'DI', 'HD']:
+        boundary = BOUNDARIES[grade]
+        if (boundary - 2) <= pct < boundary:
             return True
+            
     return False
 
 # --- UI HEADER ---
@@ -341,7 +350,7 @@ if uploaded_file is not None and score_col is not None:
             else:
                 cusp_df = analysis_df[analysis_df['Is_Cusp_Original'] == True].sort_values(by='Pct_Original', ascending=False)
                 lbl = "Original Cusp (Pre-Curve)"
-            st.caption(f"Showing: **{lbl}** (Range: 78.0 - 79.9, etc.)")
+            st.caption(f"Showing: **{lbl}** (Includes Fail Cusp: 45.0-49.9, and Boundary Cusp: 58-60, 68-70, 78-80)")
             if not cusp_df.empty: render_dynamic_table(cusp_df)
             else: st.info("No students found on cusp boundaries.")
 
